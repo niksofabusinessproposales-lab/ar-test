@@ -2,36 +2,25 @@
 <html lang="ru">
 <head>
   <meta charset="utf-8">
-  <title>AR demo</title>
+  <title>AR Test</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
-
-  <!-- model-viewer library -->
-  <script type="module" src="https://unpkg.com/@google/model-viewer/dist/model-viewer.min.js"></script>
-
-  <style>
-    body {
-      margin: 0;
-      padding: 0;
-      background-color: #000;
-      font-family: sans-serif;
-    }
-    model-viewer {
-      width: 100vw;
-      height: 100vh;
-      background-color: #f0f0f0;
-    }
-  </style>
+  <script type="module" src="https://ajax.googleapis.com/ajax/libs/model-viewer/3.4.0/model-viewer.min.js"></script>
 </head>
-<body>
+<body style="margin: 0; background-color: #000;">
 
-  <model-viewer
-    src="test.glb"
-    ar
-    ar-modes="webxr scene-viewer quick-look"
-    camera-controls
-    auto-rotate
-    shadow-intensity="1"
-    alt="Test model">
+  <model-viewer 
+    src="test.glb" 
+    ar 
+    ar-modes="scene-viewer webxr quick-look" 
+    camera-controls 
+    touch-action="pan-y"
+    alt="A 3D model" 
+    style="width: 100vw; height: 100vh; background-color: #eee;">
+    
+    <button slot="ar-button" style="background-color: white; border-radius: 4px; border: none; position: absolute; top: 16px; right: 16px; padding: 10px;">
+      👋 ЗАПУСТИТЬ AR
+    </button>
+
   </model-viewer>
 
 </body>
