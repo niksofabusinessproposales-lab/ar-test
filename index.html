@@ -2,7 +2,7 @@
 <html lang="ru">
 <head>
   <meta charset="utf-8">
-  <title>AR Test</title>
+  <title>AR Commercial</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <script type="module" src="https://ajax.googleapis.com/ajax/libs/model-viewer/3.4.0/model-viewer.min.js"></script>
 </head>
@@ -11,14 +11,18 @@
   <model-viewer 
     src="test.glb" 
     ar 
-    ar-modes="webxr" 
+    ar-modes="webxr scene-viewer" 
+    ar-scale="fixed" 
+    ar-placement="floor"
     camera-controls 
-    touch-action="pan-y"
-    alt="A 3D model" 
-    style="width: 100vw; height: 100vh; background-color: #eee;">
+    disable-pan
+    touch-action="none"
+    shadow-intensity="1.5"
+    alt="AR Model" 
+    style="width: 100vw; height: 100vh; background-color: #eee; touch-action: none;">
     
-    <button slot="ar-button" style="background-color: white; border-radius: 4px; border: none; position: absolute; top: 16px; right: 16px; padding: 10px;">
-      👋 ЗАПУСТИТЬ AR
+    <button slot="ar-button" style="position: absolute; top: 16px; right: 16px; padding: 12px 24px; background: white; border-radius: 30px; border: none; font-weight: bold; box-shadow: 0 4px 6px rgba(0,0,0,0.2);">
+      👋 ПРИМЕРИТЬ
     </button>
 
   </model-viewer>
