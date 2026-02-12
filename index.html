@@ -1,31 +1,157 @@
 <!DOCTYPE html>
 <html lang="ru">
 <head>
-  <meta charset="utf-8">
-  <title>AR Commercial</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <script type="module" src="https://ajax.googleapis.com/ajax/libs/model-viewer/3.4.0/model-viewer.min.js"></script>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Professional Business AR</title>
+    <style>
+        body { margin: 0; overflow: hidden; font-family: sans-serif; }
+        #ar-instructions {
+            position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%);
+            background: rgba(0,0,0,0.7); color: white; padding: 12px 20px;
+            border-radius: 30px; font-size: 14px; pointer-events: none; z-index: 10;
+        }
+    </style>
 </head>
-<body style="margin: 0; background-color: #000;">
+<body>
+    <div id="ar-instructions">Направьте камеру на пол и водите телефоном</div>
 
-  <model-viewer 
-    src="test3.glb" 
-    ar 
-    ar-modes="webxr scene-viewer" 
-    ar-scale="fixed" 
-    ar-placement="floor"
-    camera-controls 
-    disable-pan
-    touch-action="none"
-    shadow-intensity="1.5"
-    alt="AR Model" 
-    style="width: 100vw; height: 100vh; background-color: #eee; touch-action: none;">
-    
-    <button slot="ar-button" style="position: absolute; top: 16px; right: 16px; padding: 12px 24px; background: white; border-radius: 30px; border: none; font-weight: bold; box-shadow: 0 4px 6px rgba(0,0,0,0.2);">
-      👋 ПРИМЕРИТЬ
-    </button>
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+                "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+            }
+        }
+    </script>
 
-  </model-viewer>
+    <script type="module">
+        import * as THREE from 'three';
+        import { ARButton } from 'three/addons/webxr/ARButton.js';
+        import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
+        let container, renderer, scene, camera, controller;
+        let hitTestSource = null;
+        let hitTestSourceRequested = false;
+
+        let mesh = null; // Наша модель
+        let isPlaced = false; // Состояние: установлена или фантом
+
+        init();
+        animate();
+
+        function init() {
+            container = document.createElement('div');
+            document.body.appendChild(container);
+
+            scene = new THREE.Scene();
+            camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.01, 20);
+
+            // Свет (как советовал второй ИИ - PBR освещение)
+            const light = new THREE.HemisphereLight(0xffffff, 0xbbbbff, 1);
+            light.position.set(0.5, 1, 0.25);
+            scene.add(light);
+
+            renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+            renderer.setPixelRatio(window.devicePixelRatio);
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.xr.enabled = true;
+            container.appendChild(renderer);
+
+            // Кнопка запуска
+            document.body.appendChild(ARButton.createButton(renderer, { requiredFeatures: ['hit-test'] }));
+
+            // Загрузка модели
+            const loader = new GLTFLoader();
+            loader.load('test.glb', (gltf) => {
+                mesh = gltf.scene;
+                mesh.visible = false; // Скрыта, пока не найдем пол
+                
+                // Делаем фантомным изначально
+                setMeshOpacity(mesh, 0.5); 
+                
+                // БЛОКИРОВКА МАСШТАБА (Всегда 1:1)
+                mesh.scale.set(1, 1, 1);
+                
+                scene.add(mesh);
+            });
+
+            // Контроллер касаний
+            controller = renderer.xr.getController(0);
+            controller.addEventListener('select', onSelect);
+            scene.add(controller);
+
+            window.addEventListener('resize', onWindowResize);
+        }
+
+        function setMeshOpacity(object, opacity) {
+            object.traverse((child) => {
+                if (child.isMesh) {
+                    child.material.transparent = true;
+                    child.material.opacity = opacity;
+                }
+            });
+        }
+
+        function onSelect() {
+            if (mesh && mesh.visible) {
+                if (!isPlaced) {
+                    // ФИКСАЦИЯ: делаем модель реальной
+                    isPlaced = true;
+                    setMeshOpacity(mesh, 1.0);
+                    document.getElementById('ar-instructions').innerText = "Объект установлен. Нажмите еще раз, чтобы переставить.";
+                } else {
+                    // Перестановка (опционально)
+                    isPlaced = false;
+                    setMeshOpacity(mesh, 0.5);
+                    document.getElementById('ar-instructions').innerText = "Режим примерки (фантом)";
+                }
+            }
+        }
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        function animate() {
+            renderer.setAnimationLoop(render);
+        }
+
+        function render(timestamp, frame) {
+            if (frame) {
+                const referenceSpace = renderer.xr.getReferenceSpace();
+                const session = renderer.xr.getSession();
+
+                if (hitTestSourceRequested === false) {
+                    session.requestReferenceSpace('viewer').then((referenceSpace) => {
+                        session.requestHitTestSource({ space: referenceSpace }).then((source) => {
+                            hitTestSource = source;
+                        });
+                    });
+                    session.addEventListener('end', () => {
+                        hitTestSourceRequested = false;
+                        hitTestSource = null;
+                    });
+                    hitTestSourceRequested = true;
+                }
+
+                if (hitTestSource && !isPlaced) {
+                    const hitTestResults = frame.getHitTestResults(hitTestSource);
+                    if (hitTestResults.length) {
+                        const hit = hitTestResults[0];
+                        mesh.visible = true;
+                        // Модель следует за точкой пересечения с полом
+                        mesh.position.setFromMatrixPosition(new THREE.Matrix4().fromArray(hit.getPose(referenceSpace).transform.matrix));
+                        
+                        // Чтобы модель всегда смотрела на пользователя при установке
+                        mesh.rotation.y = camera.rotation.y;
+                    }
+                }
+            }
+            renderer.render(scene, camera);
+        }
+    </script>
 </body>
 </html>
