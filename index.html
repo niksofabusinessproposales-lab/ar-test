@@ -3,23 +3,24 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>Debug AR</title>
+    <title>Fixed AR Business</title>
     <style>
-        body { margin: 0; background-color: #202020; font-family: monospace; color: white; }
-        #debug-log {
-            position: absolute; top: 0; left: 0; width: 100%; height: 50%;
-            pointer-events: none; z-index: 100; color: #ff5555; padding: 10px;
-            font-size: 12px; white-space: pre-wrap; overflow-y: auto;
+        body { margin: 0; background-color: #000; overflow: hidden; font-family: sans-serif; }
+        #start-ar-btn {
+            position: absolute; bottom: 50px; left: 50%; transform: translateX(-50%);
+            padding: 15px 30px; background: #fff; border: none; border-radius: 50px;
+            font-weight: bold; font-size: 18px; z-index: 1000; cursor: pointer;
+            box-shadow: 0 4px 15px rgba(255,255,255,0.3);
         }
-        #info {
-            position: absolute; top: 10px; width: 100%; text-align: center;
-            z-index: 50; font-size: 16px; font-weight: bold;
+        #info-overlay {
+            position: absolute; top: 20px; width: 100%; text-align: center;
+            color: white; z-index: 100; pointer-events: none;
         }
     </style>
 </head>
 <body>
-    <div id="info">Загрузка системы...</div>
-    <div id="debug-log"></div>
+    <div id="info-overlay">Система готова. Нажмите кнопку ниже.</div>
+    <button id="start-ar-btn">ЗАПУСТИТЬ ПРИМЕРКУ</button>
 
     <script type="importmap">
         {
@@ -32,118 +33,68 @@
 
     <script type="module">
         import * as THREE from 'three';
-        import { ARButton } from 'three/addons/webxr/ARButton.js';
         import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
-        // --- ЛОВУШКА ДЛЯ ОШИБОК ---
-        const debugLog = document.getElementById('debug-log');
-        window.onerror = function(message, source, lineno, colno, error) {
-            debugLog.innerHTML += `[CRITICAL ERROR]: ${message}\nLine: ${lineno}\n`;
-        };
-        function log(msg) {
-            console.log(msg);
-            // Раскомментируй строку ниже, если хочешь видеть обычные логи на экране
-            // debugLog.innerHTML += `[INFO]: ${msg}\n`;
-        }
-        // ---------------------------
-
-        let container, scene, camera, renderer;
-        let controller;
-        let reticle;
+        let renderer, scene, camera, controller, reticle, objectToPlace;
         let hitTestSource = null;
         let hitTestSourceRequested = false;
-        let objectToPlace = null; // Наша модель
 
-        init();
-        animate();
+        const startBtn = document.getElementById('start-ar-btn');
 
-        function init() {
-            try {
-                container = document.createElement('div');
-                document.body.appendChild(container);
+        async function initAR() {
+            // Создаем сцену
+            scene = new THREE.Scene();
+            camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.01, 20);
 
-                scene = new THREE.Scene();
+            renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+            renderer.setPixelRatio(window.devicePixelRatio);
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.xr.enabled = true;
 
-                camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.01, 20);
+            // Свет
+            const light = new THREE.HemisphereLight(0xffffff, 0xbbbbff, 2);
+            scene.add(light);
 
-                const light = new THREE.HemisphereLight(0xffffff, 0xbbbbff, 3);
-                light.position.set(0.5, 1, 0.25);
-                scene.add(light);
+            // Загрузка модели (test.glb)
+            const loader = new GLTFLoader();
+            loader.load('test.glb', (gltf) => {
+                objectToPlace = gltf.scene;
+                objectToPlace.visible = false;
+                scene.add(objectToPlace);
+            });
 
-                renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-                renderer.setPixelRatio(window.devicePixelRatio);
-                renderer.setSize(window.innerWidth, window.innerHeight);
-                renderer.xr.enabled = true;
-                container.appendChild(renderer);
+            // Прицел
+            reticle = new THREE.Mesh(
+                new THREE.RingGeometry(0.15, 0.2, 32).rotateX(-Math.PI / 2),
+                new THREE.MeshBasicMaterial({ color: 0xffffff })
+            );
+            reticle.matrixAutoUpdate = false;
+            reticle.visible = false;
+            scene.add(reticle);
 
-                // Добавляем кнопку AR
-                const arButton = ARButton.createButton(renderer, { requiredFeatures: ['hit-test'] });
-                document.body.appendChild(arButton);
-                
-                // Проверка поддержки
-                if (navigator.xr) {
-                    navigator.xr.isSessionSupported('immersive-ar').then((supported) => {
-                        if (supported) {
-                            document.getElementById('info').innerText = "Готово! Нажмите кнопку START AR внизу";
-                        } else {
-                            document.getElementById('info').innerText = "WebXR AR не поддерживается этим устройством :(";
-                        }
-                    });
-                } else {
-                     document.getElementById('info').innerText = "WebXR не найден (нужен HTTPS или Chrome)";
-                }
+            // Запуск XR сессии вручную
+            const sessionInit = { requiredFeatures: ['hit-test'] };
+            const session = await navigator.xr.requestSession('immersive-ar', sessionInit);
+            
+            renderer.xr.setReferenceSpaceType('local');
+            await renderer.xr.setSession(session);
 
-                // --- ЗАГРУЗКА МОДЕЛИ ---
-                // Убедись, что файл называется test.glb
-                const loader = new GLTFLoader();
-                loader.load('test.glb', function (gltf) {
-                    objectToPlace = gltf.scene;
-                    objectToPlace.visible = false; // Скрываем, пока не поставим
-                    scene.add(objectToPlace);
-                    log("Модель загружена успешно");
-                }, undefined, function (error) {
-                    debugLog.innerHTML += `[MODEL ERROR]: Не могу найти test.glb. Проверь имя файла!\n`;
-                });
+            startBtn.style.display = 'none'; // Скрываем кнопку после запуска
 
-                // --- ПРИЦЕЛ (Кружок на полу) ---
-                reticle = new THREE.Mesh(
-                    new THREE.RingGeometry(0.15, 0.2, 32).rotateX(-Math.PI / 2),
-                    new THREE.MeshBasicMaterial()
-                );
-                reticle.matrixAutoUpdate = false;
-                reticle.visible = false;
-                scene.add(reticle);
+            controller = renderer.xr.getController(0);
+            controller.addEventListener('select', onSelect);
+            scene.add(controller);
 
-                // Контроллер нажатий
-                controller = renderer.xr.getController(0);
-                controller.addEventListener('select', onSelect);
-                scene.add(controller);
-
-                window.addEventListener('resize', onWindowResize);
-            } catch (e) {
-                debugLog.innerHTML += `[INIT ERROR]: ${e.message}\n`;
-            }
+            renderer.setAnimationLoop(render);
         }
 
         function onSelect() {
             if (reticle.visible && objectToPlace) {
-                // Ставим модель туда, где прицел
                 objectToPlace.position.setFromMatrixPosition(reticle.matrix);
-                // Поворачиваем к камере (только по Y)
-                objectToPlace.lookAt(camera.position.x, objectToPlace.position.y, camera.position.z); 
                 objectToPlace.visible = true;
-                log("Модель установлена");
+                // Всегда масштаб 1:1
+                objectToPlace.scale.set(1, 1, 1);
             }
-        }
-
-        function onWindowResize() {
-            camera.aspect = window.innerWidth / window.innerHeight;
-            camera.updateProjectionMatrix();
-            renderer.setSize(window.innerWidth, window.innerHeight);
-        }
-
-        function animate() {
-            renderer.setAnimationLoop(render);
         }
 
         function render(timestamp, frame) {
@@ -152,14 +103,10 @@
                 const session = renderer.xr.getSession();
 
                 if (hitTestSourceRequested === false) {
-                    session.requestReferenceSpace('viewer').then(function (referenceSpace) {
-                        session.requestHitTestSource({ space: referenceSpace }).then(function (source) {
+                    session.requestReferenceSpace('viewer').then((refSpace) => {
+                        session.requestHitTestSource({ space: refSpace }).then((source) => {
                             hitTestSource = source;
                         });
-                    });
-                    session.addEventListener('end', function () {
-                        hitTestSourceRequested = false;
-                        hitTestSource = null;
                     });
                     hitTestSourceRequested = true;
                 }
@@ -177,6 +124,12 @@
             }
             renderer.render(scene, camera);
         }
+
+        startBtn.addEventListener('click', () => {
+            initAR().catch(err => {
+                alert("Ошибка запуска AR: " + err.message);
+            });
+        });
     </script>
 </body>
 </html>
