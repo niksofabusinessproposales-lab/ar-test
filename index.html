@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>Fixed AR Business</title>
+    <title>Ghost Mode AR</title>
     <style>
         body { margin: 0; background-color: #000; overflow: hidden; font-family: sans-serif; }
         #start-ar-btn {
@@ -14,13 +14,13 @@
         }
         #info-overlay {
             position: absolute; top: 20px; width: 100%; text-align: center;
-            color: white; z-index: 100; pointer-events: none;
+            color: white; z-index: 100; pointer-events: none; text-shadow: 1px 1px 2px black;
         }
     </style>
 </head>
 <body>
-    <div id="info-overlay">Система готова. Нажмите кнопку ниже.</div>
-    <button id="start-ar-btn">ЗАПУСТИТЬ ПРИМЕРКУ</button>
+    <div id="info-overlay">Нажмите кнопку, чтобы начать</div>
+    <button id="start-ar-btn">ЗАПУСТИТЬ AR</button>
 
     <script type="importmap">
         {
@@ -35,14 +35,15 @@
         import * as THREE from 'three';
         import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
-        let renderer, scene, camera, controller, reticle, objectToPlace;
+        let renderer, scene, camera, controller, objectToPlace;
         let hitTestSource = null;
         let hitTestSourceRequested = false;
+        let isLocked = false; // Флаг: зафиксирован объект или "призрак"
 
         const startBtn = document.getElementById('start-ar-btn');
+        const infoText = document.getElementById('info-overlay');
 
         async function initAR() {
-            // Создаем сцену
             scene = new THREE.Scene();
             camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.01, 20);
 
@@ -50,36 +51,35 @@
             renderer.setPixelRatio(window.devicePixelRatio);
             renderer.setSize(window.innerWidth, window.innerHeight);
             renderer.xr.enabled = true;
+            
+            // Улучшенный свет для реализма
+            const hemiLight = new THREE.HemisphereLight(0xffffff, 0x444444, 3);
+            hemiLight.position.set(0, 1, 0);
+            scene.add(hemiLight);
+            
+            const dirLight = new THREE.DirectionalLight(0xffffff, 1);
+            dirLight.position.set(0, 10, 5);
+            scene.add(dirLight);
 
-            // Свет
-            const light = new THREE.HemisphereLight(0xffffff, 0xbbbbff, 2);
-            scene.add(light);
-
-            // Загрузка модели (test.glb)
+            // Загрузка модели
             const loader = new GLTFLoader();
-            loader.load('test.glb', (gltf) => {
+            loader.load('test3.glb', (gltf) => {
                 objectToPlace = gltf.scene;
-                objectToPlace.visible = false;
+                objectToPlace.visible = false; 
                 scene.add(objectToPlace);
+                
+                // Сразу делаем его полупрозрачным (режим призрака)
+                updateOpacity(objectToPlace, 0.5);
             });
 
-            // Прицел
-            reticle = new THREE.Mesh(
-                new THREE.RingGeometry(0.15, 0.2, 32).rotateX(-Math.PI / 2),
-                new THREE.MeshBasicMaterial({ color: 0xffffff })
-            );
-            reticle.matrixAutoUpdate = false;
-            reticle.visible = false;
-            scene.add(reticle);
-
-            // Запуск XR сессии вручную
+            // Стартуем сессию
             const sessionInit = { requiredFeatures: ['hit-test'] };
             const session = await navigator.xr.requestSession('immersive-ar', sessionInit);
-            
             renderer.xr.setReferenceSpaceType('local');
             await renderer.xr.setSession(session);
 
-            startBtn.style.display = 'none'; // Скрываем кнопку после запуска
+            startBtn.style.display = 'none';
+            infoText.innerText = "Ищем пол... Водите телефоном";
 
             controller = renderer.xr.getController(0);
             controller.addEventListener('select', onSelect);
@@ -88,12 +88,32 @@
             renderer.setAnimationLoop(render);
         }
 
+        // Функция переключения прозрачности
+        function updateOpacity(obj, opacity) {
+            obj.traverse((child) => {
+                if (child.isMesh) {
+                    child.material.transparent = true;
+                    child.material.opacity = opacity;
+                    // Нужно для корректного отображения прозрачности
+                    child.material.depthWrite = opacity === 1.0; 
+                    child.material.needsUpdate = true;
+                }
+            });
+        }
+
         function onSelect() {
-            if (reticle.visible && objectToPlace) {
-                objectToPlace.position.setFromMatrixPosition(reticle.matrix);
-                objectToPlace.visible = true;
-                // Всегда масштаб 1:1
-                objectToPlace.scale.set(1, 1, 1);
+            if (!objectToPlace || !objectToPlace.visible) return;
+
+            if (isLocked) {
+                // Если был зафиксирован -> "Отлипаем", снова становится призраком
+                isLocked = false;
+                updateOpacity(objectToPlace, 0.5);
+                infoText.innerText = "Режим примерки (Тапните для установки)";
+            } else {
+                // Если был призраком -> Фиксируем на месте
+                isLocked = true;
+                updateOpacity(objectToPlace, 1.0); // Полная видимость
+                infoText.innerText = "Объект установлен (Тапните, чтобы переставить)";
             }
         }
 
@@ -113,12 +133,22 @@
 
                 if (hitTestSource) {
                     const hitTestResults = frame.getHitTestResults(hitTestSource);
-                    if (hitTestResults.length) {
+                    
+                    // Если пол найден
+                    if (hitTestResults.length > 0) {
                         const hit = hitTestResults[0];
-                        reticle.visible = true;
-                        reticle.matrix.fromArray(hit.getPose(referenceSpace).transform.matrix);
-                    } else {
-                        reticle.visible = false;
+                        
+                        // Двигаем модель ТОЛЬКО если она НЕ зафиксирована (isLocked === false)
+                        if (!isLocked && objectToPlace) {
+                            objectToPlace.visible = true;
+                            objectToPlace.position.setFromMatrixPosition(new THREE.Matrix4().fromArray(hit.getPose(referenceSpace).transform.matrix));
+                            
+                            // Поворачиваем модель лицом к пользователю (опционально, можно убрать)
+                            // objectToPlace.lookAt(camera.position.x, objectToPlace.position.y, camera.position.z);
+                            
+                            // ЖЕЛЕЗНЫЙ МАСШТАБ
+                            objectToPlace.scale.set(1, 1, 1);
+                        }
                     }
                 }
             }
@@ -126,9 +156,7 @@
         }
 
         startBtn.addEventListener('click', () => {
-            initAR().catch(err => {
-                alert("Ошибка запуска AR: " + err.message);
-            });
+            initAR().catch(err => alert("Ошибка: " + err.message));
         });
     </script>
 </body>
