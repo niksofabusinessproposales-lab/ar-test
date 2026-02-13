@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>Ghost Mode AR</title>
+    <title>Ghost Mode AR - Anchored</title>
     <style>
         body { margin: 0; background-color: #000; overflow: hidden; font-family: sans-serif; }
         #start-ar-btn {
@@ -22,7 +22,6 @@
     <div id="info-overlay">Нажмите кнопку, чтобы начать</div>
     <button id="start-ar-btn">ЗАПУСТИТЬ AR</button>
 
-    <!-- Исправленный importmap без пробелов -->
     <script type="importmap">
         {
             "imports": {
@@ -39,10 +38,10 @@
         let renderer, scene, camera, controller, objectToPlace;
         let hitTestSource = null;
         let hitTestSourceRequested = false;
-        let isLocked = false; // Флаг: зафиксирован объект или "призрак"
-        // Переменные для хранения фиксированной позиции и поворота
-        let fixedPosition = new THREE.Vector3();
-        let fixedRotationY = 0;
+        
+        let isLocked = false; 
+        let lastHitResult = null; // Храним последний результат поиска пола
+        let currentAnchor = null; // Храним текущий AR Якорь
 
         const startBtn = document.getElementById('start-ar-btn');
         const infoText = document.getElementById('info-overlay');
@@ -56,7 +55,7 @@
             renderer.setSize(window.innerWidth, window.innerHeight);
             renderer.xr.enabled = true;
             
-            // Улучшенный свет для реализма
+            // Свет
             const hemiLight = new THREE.HemisphereLight(0xffffff, 0x444444, 3);
             hemiLight.position.set(0, 1, 0);
             scene.add(hemiLight);
@@ -68,89 +67,102 @@
             // Загрузка модели
             const loader = new GLTFLoader();
             loader.load(
-                'test3.glb', 
+                'test.glb', 
                 (gltf) => {
                     objectToPlace = gltf.scene;
                     objectToPlace.visible = false; 
                     scene.add(objectToPlace);
-                    
-                    // Сразу делаем его полупрозрачным (режим призрака)
                     updateOpacity(objectToPlace, 0.5);
                 },
-                (xhr) => {
-                    // Прогресс загрузки (опционально)
-                    console.log((xhr.loaded / xhr.total * 100) + '% loaded');
-                },
+                undefined,
                 (error) => {
-                    // Обработка ошибки загрузки
-                    console.error('Ошибка загрузки модели:', error);
-                    infoText.innerText = "Ошибка загрузки модели. Проверьте файл test.glb";
+                    console.error(error);
+                    infoText.innerText = "Ошибка загрузки test.glb";
                 }
             );
 
-            // Стартуем сессию
-            const sessionInit = { requiredFeatures: ['hit-test'] };
-            const session = await navigator.xr.requestSession('immersive-ar', sessionInit);
-            renderer.xr.setReferenceSpaceType('local');
-            await renderer.xr.setSession(session);
+            // ВАЖНО: Добавляем 'anchors' в requiredFeatures
+            // Также меняем referenceSpaceType на 'local-floor' для стабильности при ходьбе
+            const sessionInit = { requiredFeatures: ['hit-test', 'anchors'] };
+            
+            try {
+                const session = await navigator.xr.requestSession('immersive-ar', sessionInit);
+                renderer.xr.setReferenceSpaceType('local-floor'); 
+                await renderer.xr.setSession(session);
 
-            // Очистка памяти при выходе из сессии
-            session.addEventListener('end', () => {
-                if (hitTestSource) hitTestSource.cancel();
-                hitTestSource = null;
-                hitTestSourceRequested = false;
-            });
+                session.addEventListener('end', () => {
+                    hitTestSource = null;
+                    hitTestSourceRequested = false;
+                    lastHitResult = null;
+                    if (currentAnchor) {
+                        currentAnchor.delete();
+                        currentAnchor = null;
+                    }
+                });
 
-            startBtn.style.display = 'none';
-            infoText.innerText = "Ищем пол... Водите телефоном";
+                startBtn.style.display = 'none';
+                infoText.innerText = "Ищем пол... Водите телефоном";
 
-            controller = renderer.xr.getController(0);
-            controller.addEventListener('select', onSelect);
-            scene.add(controller);
+                controller = renderer.xr.getController(0);
+                controller.addEventListener('select', onSelect);
+                scene.add(controller);
 
-            renderer.setAnimationLoop(render);
+                renderer.setAnimationLoop(render);
+            } catch (e) {
+                alert("AR не поддерживается или ошибка запуска: " + e.message);
+            }
         }
 
-        // Функция переключения прозрачности
         function updateOpacity(obj, opacity) {
             obj.traverse((child) => {
                 if (child.isMesh) {
                     child.material.transparent = true;
                     child.material.opacity = opacity;
-                    // Нужно для корректного отображения прозрачности
                     child.material.depthWrite = opacity === 1.0; 
                     child.material.needsUpdate = true;
                 }
             });
         }
 
-        // Обработчик выбора (тапа)
-        function onSelect() {
-            if (!objectToPlace || !objectToPlace.visible) return;
+        async function onSelect() {
+            if (!objectToPlace) return;
 
             if (isLocked) {
-                // Если был зафиксирован -> "Отлипаем", снова становится призраком
+                // РАЗБЛОКИРОВКА
                 isLocked = false;
+                
+                // Удаляем якорь, так как мы снова двигаем объект
+                if (currentAnchor) {
+                    currentAnchor.delete();
+                    currentAnchor = null;
+                }
+
                 updateOpacity(objectToPlace, 0.5);
                 infoText.innerText = "Режим примерки (Тапните для установки)";
             } else {
-                // Если был призраком -> Фиксируем на месте: сохраняем текущую позицию и поворот
-                isLocked = true;
-                // Сохраняем текущую позицию и поворот в момент фиксации
-                fixedPosition.copy(objectToPlace.position);
-                fixedRotationY = objectToPlace.rotation.y;
+                // БЛОКИРОВКА (Создание Якоря)
+                if (lastHitResult) {
+                    isLocked = true;
+                    updateOpacity(objectToPlace, 1.0);
+                    infoText.innerText = "Объект закреплен якорем (Тапните, чтобы переставить)";
 
-                updateOpacity(objectToPlace, 1.0); // Полная видимость
-                infoText.innerText = "Объект установлен (Тапните, чтобы переставить)";
+                    // Создаем нативный WebXR Anchor в точке касания
+                    try {
+                        currentAnchor = await lastHitResult.createAnchor();
+                    } catch (e) {
+                        console.error("Не удалось создать якорь", e);
+                        infoText.innerText = "Ошибка создания якоря (объект может скользить)";
+                    }
+                }
             }
         }
 
-        // Основной цикл рендеринга
         function render(timestamp, frame) {
             if (frame) {
                 const referenceSpace = renderer.xr.getReferenceSpace();
                 const session = renderer.xr.getSession();
 
+                // 1. Инициализация HitTest
                 if (hitTestSourceRequested === false) {
                     session.requestReferenceSpace('viewer').then((refSpace) => {
                         session.requestHitTestSource({ space: refSpace }).then((source) => {
@@ -160,41 +172,54 @@
                     hitTestSourceRequested = true;
                 }
 
+                // 2. Логика позиционирования
                 if (hitTestSource) {
                     const hitTestResults = frame.getHitTestResults(hitTestSource);
                     
-                    // Если пол найден
                     if (hitTestResults.length > 0) {
                         const hit = hitTestResults[0];
-                        
-                        // Двигаем модель ТОЛЬКО если она НЕ зафиксирована (isLocked === false)
+                        lastHitResult = hit; // Сохраняем для onSelect
+
+                        // Если объект НЕ зафиксирован - он призрак, следует за хитом
                         if (!isLocked && objectToPlace) {
                             objectToPlace.visible = true;
-                            objectToPlace.position.setFromMatrixPosition(new THREE.Matrix4().fromArray(hit.getPose(referenceSpace).transform.matrix));
+                            const hitPose = hit.getPose(referenceSpace);
                             
-                            // ПОВОРОТ ОБЪЕКТА ТОЛЬКО ВОКРУГ ВЕРТИКАЛЬНОЙ ОСИ (Y) к камере
+                            objectToPlace.position.setFromMatrixPosition(new THREE.Matrix4().fromArray(hitPose.transform.matrix));
+                            
+                            // Вращение к камере (только Y)
                             const angle = Math.atan2(
                                 camera.position.x - objectToPlace.position.x,
                                 camera.position.z - objectToPlace.position.z
                             );
                             objectToPlace.rotation.y = angle;
-                            
-                            // ЖЕЛЕЗНЫЙ МАСШТАБ
-                            objectToPlace.scale.set(1, 1, 1);
                         }
-                        // Если isLocked === true, НИЧЕГО не делаем с позицией и поворотом в этом блоке
                     } else {
-                         // Если hitTest не дал результатов, и объект не зафиксирован, он исчезает
-                         if (!isLocked && objectToPlace) {
-                              objectToPlace.visible = false;
-                         }
+                        // Если пол потерян и объект не зафиксирован - прячем
+                        if (!isLocked && objectToPlace) {
+                             objectToPlace.visible = false;
+                             lastHitResult = null;
+                        }
+                    }
+                }
+
+                // 3. ОБНОВЛЕНИЕ ПОЗИЦИИ ПО ЯКОРЮ (Самое важное!)
+                // Если у нас есть якорь, мы игнорируем старые координаты и жестко ставим объект туда, где якорь
+                if (isLocked && currentAnchor && objectToPlace) {
+                    const anchorPose = frame.getPose(currentAnchor.anchorSpace, referenceSpace);
+                    if (anchorPose) {
+                        // Обновляем ТОЛЬКО позицию из якоря. 
+                        // Вращение оставляем то, которое было при установке (или можно тоже брать из якоря, но тогда оно может прыгнуть)
+                        objectToPlace.position.copy(anchorPose.transform.position);
+                        
+                        // Если нужно, чтобы якорь контролировал и вращение (обычно не нужно для мебели, которую мы повернули к себе)
+                        // objectToPlace.quaternion.copy(anchorPose.transform.orientation); 
                     }
                 }
             }
             renderer.render(scene, camera);
         }
 
-        // Обработка поворота экрана (ресайз)
         window.addEventListener('resize', () => {
             camera.aspect = window.innerWidth / window.innerHeight;
             camera.updateProjectionMatrix();
