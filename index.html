@@ -22,6 +22,7 @@
     <div id="info-overlay">Нажмите кнопку, чтобы начать</div>
     <button id="start-ar-btn">ЗАПУСТИТЬ AR</button>
 
+    <!-- Исправленный importmap без пробелов -->
     <script type="importmap">
         {
             "imports": {
@@ -39,6 +40,9 @@
         let hitTestSource = null;
         let hitTestSourceRequested = false;
         let isLocked = false; // Флаг: зафиксирован объект или "призрак"
+        // Переменные для хранения фиксированной позиции и поворота
+        let fixedPosition = new THREE.Vector3();
+        let fixedRotationY = 0;
 
         const startBtn = document.getElementById('start-ar-btn');
         const infoText = document.getElementById('info-overlay');
@@ -64,7 +68,7 @@
             // Загрузка модели
             const loader = new GLTFLoader();
             loader.load(
-                'test3.glb', 
+                'test.glb', 
                 (gltf) => {
                     objectToPlace = gltf.scene;
                     objectToPlace.visible = false; 
@@ -120,6 +124,7 @@
             });
         }
 
+        // Обработчик выбора (тапа)
         function onSelect() {
             if (!objectToPlace || !objectToPlace.visible) return;
 
@@ -129,13 +134,18 @@
                 updateOpacity(objectToPlace, 0.5);
                 infoText.innerText = "Режим примерки (Тапните для установки)";
             } else {
-                // Если был призраком -> Фиксируем на месте
+                // Если был призраком -> Фиксируем на месте: сохраняем текущую позицию и поворот
                 isLocked = true;
+                // Сохраняем текущую позицию и поворот в момент фиксации
+                fixedPosition.copy(objectToPlace.position);
+                fixedRotationY = objectToPlace.rotation.y;
+
                 updateOpacity(objectToPlace, 1.0); // Полная видимость
                 infoText.innerText = "Объект установлен (Тапните, чтобы переставить)";
             }
         }
 
+        // Основной цикл рендеринга
         function render(timestamp, frame) {
             if (frame) {
                 const referenceSpace = renderer.xr.getReferenceSpace();
@@ -172,6 +182,12 @@
                             // ЖЕЛЕЗНЫЙ МАСШТАБ
                             objectToPlace.scale.set(1, 1, 1);
                         }
+                        // Если isLocked === true, НИЧЕГО не делаем с позицией и поворотом в этом блоке
+                    } else {
+                         // Если hitTest не дал результатов, и объект не зафиксирован, он исчезает
+                         if (!isLocked && objectToPlace) {
+                              objectToPlace.visible = false;
+                         }
                     }
                 }
             }
