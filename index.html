@@ -64,7 +64,7 @@
             // Загрузка модели
             const loader = new GLTFLoader();
             loader.load(
-                'test3.glb', 
+                'test.glb', 
                 (gltf) => {
                     objectToPlace = gltf.scene;
                     objectToPlace.visible = false; 
@@ -162,8 +162,12 @@
                             objectToPlace.visible = true;
                             objectToPlace.position.setFromMatrixPosition(new THREE.Matrix4().fromArray(hit.getPose(referenceSpace).transform.matrix));
                             
-                            // ПОВОРОТ ОБЪЕКТА К КАМЕРЕ (лицом к пользователю)
-                            objectToPlace.lookAt(camera.position);
+                            // ПОВОРОТ ОБЪЕКТА ТОЛЬКО ВОКРУГ ВЕРТИКАЛЬНОЙ ОСИ (Y) к камере
+                            const angle = Math.atan2(
+                                camera.position.x - objectToPlace.position.x,
+                                camera.position.z - objectToPlace.position.z
+                            );
+                            objectToPlace.rotation.y = angle;
                             
                             // ЖЕЛЕЗНЫЙ МАСШТАБ
                             objectToPlace.scale.set(1, 1, 1);
