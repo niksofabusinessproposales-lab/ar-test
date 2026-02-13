@@ -63,20 +63,39 @@
 
             // Загрузка модели
             const loader = new GLTFLoader();
-            loader.load('test3.glb', (gltf) => {
-                objectToPlace = gltf.scene;
-                objectToPlace.visible = false; 
-                scene.add(objectToPlace);
-                
-                // Сразу делаем его полупрозрачным (режим призрака)
-                updateOpacity(objectToPlace, 0.5);
-            });
+            loader.load(
+                'test3.glb', 
+                (gltf) => {
+                    objectToPlace = gltf.scene;
+                    objectToPlace.visible = false; 
+                    scene.add(objectToPlace);
+                    
+                    // Сразу делаем его полупрозрачным (режим призрака)
+                    updateOpacity(objectToPlace, 0.5);
+                },
+                (xhr) => {
+                    // Прогресс загрузки (опционально)
+                    console.log((xhr.loaded / xhr.total * 100) + '% loaded');
+                },
+                (error) => {
+                    // Обработка ошибки загрузки
+                    console.error('Ошибка загрузки модели:', error);
+                    infoText.innerText = "Ошибка загрузки модели. Проверьте файл test.glb";
+                }
+            );
 
             // Стартуем сессию
             const sessionInit = { requiredFeatures: ['hit-test'] };
             const session = await navigator.xr.requestSession('immersive-ar', sessionInit);
             renderer.xr.setReferenceSpaceType('local');
             await renderer.xr.setSession(session);
+
+            // Очистка памяти при выходе из сессии
+            session.addEventListener('end', () => {
+                if (hitTestSource) hitTestSource.cancel();
+                hitTestSource = null;
+                hitTestSourceRequested = false;
+            });
 
             startBtn.style.display = 'none';
             infoText.innerText = "Ищем пол... Водите телефоном";
@@ -143,8 +162,8 @@
                             objectToPlace.visible = true;
                             objectToPlace.position.setFromMatrixPosition(new THREE.Matrix4().fromArray(hit.getPose(referenceSpace).transform.matrix));
                             
-                            // Поворачиваем модель лицом к пользователю (опционально, можно убрать)
-                            // objectToPlace.lookAt(camera.position.x, objectToPlace.position.y, camera.position.z);
+                            // ПОВОРОТ ОБЪЕКТА К КАМЕРЕ (лицом к пользователю)
+                            objectToPlace.lookAt(camera.position);
                             
                             // ЖЕЛЕЗНЫЙ МАСШТАБ
                             objectToPlace.scale.set(1, 1, 1);
@@ -154,6 +173,13 @@
             }
             renderer.render(scene, camera);
         }
+
+        // Обработка поворота экрана (ресайз)
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
 
         startBtn.addEventListener('click', () => {
             initAR().catch(err => alert("Ошибка: " + err.message));
