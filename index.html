@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>AR Master Mode</title>
+    <title>AR Ghost: Stable Edition</title>
     <style>
         body { margin: 0; background-color: #000; overflow: hidden; font-family: sans-serif; }
         #start-ar-btn {
@@ -37,15 +37,14 @@
         import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
         let renderer, scene, camera, controller;
-        let modelContainer; // Контейнер для модели (для исправления пивота)
-        let reticle; // Курсор на полу
+        let modelContainer; // Контейнер для модели (для исправления центра)
+        let reticle; // Курсор на полу (оставим его для точности, но он будет малозаметным)
         
         let hitTestSource = null;
         let hitTestSourceRequested = false;
         
-        let isLocked = false; 
+        let isLocked = false; // false = режим призрака, true = режим камня
         let currentAnchor = null; 
-        let objectVisible = false;
 
         const startBtn = document.getElementById('start-ar-btn');
         const infoText = document.getElementById('info-overlay');
@@ -69,17 +68,16 @@
             
             const dirLight = new THREE.DirectionalLight(0xffffff, 1.5);
             dirLight.position.set(2, 5, 2);
-            dirLight.castShadow = true; 
             scene.add(dirLight);
 
-            // 1. Создаем контейнер-группу. Именно её мы будем двигать.
+            // 1. Создаем контейнер
             modelContainer = new THREE.Group();
             modelContainer.visible = false; 
             scene.add(modelContainer);
 
-            // 2. Создаем "Прицел" (Reticle) - кольцо на полу
-            const ringGeo = new THREE.RingGeometry(0.15, 0.2, 32).rotateX(-Math.PI / 2);
-            const ringMat = new THREE.MeshBasicMaterial({ color: 0xffffff, opacity: 0.8, transparent: true });
+            // 2. Создаем прицел (пусть будет тонкое кольцо под мебелью, это удобно)
+            const ringGeo = new THREE.RingGeometry(0.05, 0.06, 32).rotateX(-Math.PI / 2);
+            const ringMat = new THREE.MeshBasicMaterial({ color: 0xffffff, opacity: 0.5, transparent: true });
             reticle = new THREE.Mesh(ringGeo, ringMat);
             reticle.matrixAutoUpdate = false;
             reticle.visible = false;
@@ -88,26 +86,25 @@
             // Загрузка модели
             const loader = new GLTFLoader();
             loader.load(
-                'test3.glb', 
+                'test.glb', 
                 (gltf) => {
                     const model = gltf.scene;
                     
-                    // === МАГИЯ АВТО-ЦЕНТРОВКИ ===
-                    // Вычисляем границы модели
+                    // === АВТО-ЦЕНТРОВКА (Та самая, что дала стабильность) ===
                     const box = new THREE.Box3().setFromObject(model);
                     const center = box.getCenter(new THREE.Vector3());
-                    const size = box.getSize(new THREE.Vector3());
                     
-                    // Сдвигаем модель внутри контейнера так, чтобы её НИЗ (min.y) стал нулем (0)
-                    // И центр по X/Z тоже стал нулем.
+                    // Центрируем модель внутри контейнера по X/Z и ставим на пол по Y
                     model.position.x += (model.position.x - center.x);
                     model.position.y += (model.position.y - box.min.y);
                     model.position.z += (model.position.z - center.z);
                     
-                    // Добавляем модель в контейнер
                     modelContainer.add(model);
                     
-                    console.log("Модель загружена и отцентрирована");
+                    // Делаем модель полупрозрачной для старта (режим призрака)
+                    updateOpacity(modelContainer, 0.5);
+                    
+                    console.log("Модель загружена");
                     infoText.innerText = "Модель готова. Нажмите Старт";
                 },
                 undefined,
@@ -121,10 +118,19 @@
             window.addEventListener('resize', onWindowResize);
         }
 
+        // Функция управления прозрачностью
+        function updateOpacity(obj, opacity) {
+            obj.traverse((child) => {
+                if (child.isMesh) {
+                    child.material.transparent = true;
+                    child.material.opacity = opacity;
+                    child.material.depthWrite = opacity === 1.0; 
+                    child.material.needsUpdate = true;
+                }
+            });
+        }
+
         async function onStartAR() {
-            // === ИСПРАВЛЕНИЕ ЗАПУСКА ===
-            // Мы явно просим 'local-floor' в optionalFeatures. 
-            // Это починит ошибку "Not supported", так как это запрос, а не приказ.
             const sessionInit = { 
                 requiredFeatures: ['hit-test'], 
                 optionalFeatures: ['dom-overlay', 'local-floor', 'anchors'],
@@ -135,20 +141,16 @@
                 const session = await navigator.xr.requestSession('immersive-ar', sessionInit);
                 renderer.xr.setSession(session);
                 
-                // Проверяем, дали ли нам 'local-floor'
                 if (session.enabledFeatures.includes('local-floor')) {
                     renderer.xr.setReferenceSpaceType('local-floor');
-                    console.log("Режим: LOCAL-FLOOR (Стабильный)");
                 } else {
                     renderer.xr.setReferenceSpaceType('local');
-                    console.log("Режим: LOCAL (Обычный)");
-                    infoText.innerText += " (Стабилизация пола ограничена)";
                 }
 
                 session.addEventListener('end', onSessionEnd);
 
                 startBtn.style.display = 'none';
-                infoText.innerText = "Ищем пол... Медленно водите камерой";
+                infoText.innerText = "Ищем пол... Водите камерой";
 
                 controller = renderer.xr.getController(0);
                 controller.addEventListener('select', onSelect);
@@ -171,47 +173,43 @@
             startBtn.style.display = 'block';
         }
 
-        // Обработка тапа
         async function onSelect() {
-            if (!reticle.visible) return;
+            // Если прицел не виден (пол не найден), клик игнорируем
+            if (!reticle.visible && !isLocked) return;
 
             if (isLocked) {
-                // Разблокировка
+                // === БЫЛ УСТАНОВЛЕН -> СТАНОВИТСЯ ПРИЗРАКОМ ===
                 isLocked = false;
-                modelContainer.visible = false; // Скрываем модель, показываем прицел
+                
+                // Удаляем жесткий якорь
                 if (currentAnchor) {
                     currentAnchor.delete();
                     currentAnchor = null;
                 }
-                infoText.innerText = "Поиск места... Тапните для установки";
+
+                // Делаем прозрачным
+                updateOpacity(modelContainer, 0.5);
+                infoText.innerText = "Режим призрака: Тапните для установки";
+
             } else {
-                // Установка
+                // === БЫЛ ПРИЗРАКОМ -> ФИКСИРУЕМ ===
                 isLocked = true;
-                modelContainer.visible = true;
                 
-                // Копируем позицию из прицела в контейнер модели
-                modelContainer.position.setFromMatrixPosition(reticle.matrix);
-                
-                // Поворачиваем к камере (только Y)
-                const camPos = new THREE.Vector3().setFromMatrixPosition(camera.matrixWorld);
-                const modelPos = new THREE.Vector3().setFromMatrixPosition(modelContainer.matrix);
-                const angle = Math.atan2(camPos.x - modelPos.x, camPos.z - modelPos.z);
-                modelContainer.rotation.y = angle;
+                // Делаем непрозрачным
+                updateOpacity(modelContainer, 1.0);
+                infoText.innerText = "Установлено! (Тапните, чтобы переставить)";
 
-                infoText.innerText = "Установлено! (Тапните для сброса)";
-
-                // Создаем якорь для жесткой сцепки с миром
-                if (hitTestSource && renderer.xr.getSession().enabledFeatures.includes('anchors')) {
-                    // Мы берем последний известный хит из рендерера (хитрость)
-                    // Но проще просто создать якорь в текущем положении прицела
-                    // К сожалению, createAnchor требует hitResult. 
-                    // Мы будем использовать frame.createAnchor в цикле render, если нужно, 
-                    // но здесь мы полагаемся на логику render loop для якорей.
+                // Создаем якорь в текущем месте для максимальной стабильности
+                if (renderer.xr.getSession().enabledFeatures.includes('anchors') && latestHit) {
+                    try {
+                        currentAnchor = await latestHit.createAnchor();
+                    } catch (e) {
+                        console.error("Не удалось создать якорь", e);
+                    }
                 }
             }
         }
 
-        // Переменная для хранения последнего хита для создания якоря
         let latestHit = null;
 
         function render(timestamp, frame) {
@@ -228,42 +226,48 @@
                     hitTestSourceRequested = true;
                 }
 
-                if (hitTestSource) {
-                    const hitTestResults = frame.getHitTestResults(hitTestSource);
-
-                    // ЛОГИКА ПРИЦЕЛА (Пока не зафиксировано)
-                    if (!isLocked && hitTestResults.length > 0) {
-                        const hit = hitTestResults[0];
-                        latestHit = hit;
-                        reticle.visible = true;
-                        
-                        // Ставим прицел на пол
-                        const hitPose = hit.getPose(referenceSpace);
-                        reticle.matrix.fromArray(hitPose.transform.matrix);
-                    } else {
-                        reticle.visible = false;
-                    }
-
-                    // ЛОГИКА СОЗДАНИЯ ЯКОРЯ (Однократно при клике)
-                    if (isLocked && !currentAnchor && latestHit && session.enabledFeatures.includes('anchors')) {
-                        latestHit.createAnchor().then((anchor) => {
-                            currentAnchor = anchor;
-                            console.log("Якорь создан!");
-                        }).catch(e => console.error(e));
-                    }
-                }
-
-                // ЛОГИКА СТАБИЛИЗАЦИИ
+                // Если есть якорь (объект зафиксирован), обновляем его позицию
+                // Это и есть "каменная" стабильность
                 if (isLocked && currentAnchor) {
                     const anchorPose = frame.getPose(currentAnchor.anchorSpace, referenceSpace);
                     if (anchorPose) {
-                        // Железобетонная привязка к якорю
-                        modelContainer.visible = true;
                         modelContainer.position.copy(anchorPose.transform.position);
-                        // Вращение берем из якоря, но корректируем на наш начальный поворот (сложно),
-                        // поэтому для мебели часто лучше обновлять ТОЛЬКО позицию, 
-                        // а вращение оставлять то, которое задали при установке.
-                        // modelContainer.quaternion.copy(anchorPose.transform.orientation); 
+                        // Поворот НЕ обновляем из якоря, оставляем тот, который был при установке
+                        // Это важно, чтобы диван не вертелся сам по себе
+                    }
+                }
+
+                // ЛОГИКА ПРИЗРАКА (поиск места)
+                if (hitTestSource && !isLocked) {
+                    const hitTestResults = frame.getHitTestResults(hitTestSource);
+
+                    if (hitTestResults.length > 0) {
+                        const hit = hitTestResults[0];
+                        latestHit = hit;
+                        
+                        reticle.visible = true;
+                        modelContainer.visible = true;
+
+                        const hitPose = hit.getPose(referenceSpace);
+                        
+                        // 1. Ставим прицел и модель в точку на полу
+                        reticle.matrix.fromArray(hitPose.transform.matrix);
+                        modelContainer.position.setFromMatrixPosition(reticle.matrix);
+
+                        // 2. === ПОВОРОТ ЛИЦОМ К КАМЕРЕ ===
+                        // Берем позицию камеры
+                        const camPos = new THREE.Vector3().setFromMatrixPosition(camera.matrixWorld);
+                        // Считаем угол только в плоскости XZ (чтобы диван не наклонялся вверх/вниз)
+                        const angle = Math.atan2(
+                            camPos.x - modelContainer.position.x, 
+                            camPos.z - modelContainer.position.z
+                        );
+                        // Применяем поворот
+                        modelContainer.rotation.y = angle;
+
+                    } else {
+                        // Если пол потерян, прячем прицел (модель можно оставить или спрятать)
+                        reticle.visible = false;
                     }
                 }
             }
