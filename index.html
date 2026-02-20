@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>Ghost Mode AR (Android + iOS)</title>
+    <title>Ghost Mode AR</title>
     <style>
         body { margin: 0; background-color: #000; overflow: hidden; font-family: sans-serif; }
         #start-ar-btn {
@@ -35,16 +35,10 @@
         import * as THREE from 'three';
         import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
-        // =======================================================
-        // НАСТРОЙКИ МОДЕЛИ (МЕНЯТЬ ТОЛЬКО ЗДЕСЬ)
-        // Впиши имя файла без расширения (например: 'test2', 'sofa', 'cup')
-        const MODEL_NAME = 'test9';
-        // =======================================================
-
         let renderer, scene, camera, controller, objectToPlace;
         let hitTestSource = null;
         let hitTestSourceRequested = false;
-        let isLocked = false; 
+        let isLocked = false; // Флаг: зафиксирован объект или "призрак"
 
         const startBtn = document.getElementById('start-ar-btn');
         const infoText = document.getElementById('info-overlay');
@@ -58,6 +52,7 @@
             renderer.setSize(window.innerWidth, window.innerHeight);
             renderer.xr.enabled = true;
             
+            // Улучшенный свет для реализма
             const hemiLight = new THREE.HemisphereLight(0xffffff, 0x444444, 3);
             hemiLight.position.set(0, 1, 0);
             scene.add(hemiLight);
@@ -66,15 +61,18 @@
             dirLight.position.set(0, 10, 5);
             scene.add(dirLight);
 
+            // Загрузка модели
             const loader = new GLTFLoader();
-            // Код сам добавляет .glb для Android
-            loader.load(`${MODEL_NAME}.glb`, (gltf) => {
+            loader.load('test.glb', (gltf) => {
                 objectToPlace = gltf.scene;
                 objectToPlace.visible = false; 
                 scene.add(objectToPlace);
+                
+                // Сразу делаем его полупрозрачным (режим призрака)
                 updateOpacity(objectToPlace, 0.5);
             });
 
+            // Стартуем сессию
             const sessionInit = { requiredFeatures: ['hit-test'] };
             const session = await navigator.xr.requestSession('immersive-ar', sessionInit);
             renderer.xr.setReferenceSpaceType('local');
@@ -90,11 +88,13 @@
             renderer.setAnimationLoop(render);
         }
 
+        // Функция переключения прозрачности
         function updateOpacity(obj, opacity) {
             obj.traverse((child) => {
                 if (child.isMesh) {
                     child.material.transparent = true;
                     child.material.opacity = opacity;
+                    // Нужно для корректного отображения прозрачности
                     child.material.depthWrite = opacity === 1.0; 
                     child.material.needsUpdate = true;
                 }
@@ -105,12 +105,14 @@
             if (!objectToPlace || !objectToPlace.visible) return;
 
             if (isLocked) {
+                // Если был зафиксирован -> "Отлипаем", снова становится призраком
                 isLocked = false;
                 updateOpacity(objectToPlace, 0.5);
                 infoText.innerText = "Режим примерки (Тапните для установки)";
             } else {
+                // Если был призраком -> Фиксируем на месте
                 isLocked = true;
-                updateOpacity(objectToPlace, 1.0);
+                updateOpacity(objectToPlace, 1.0); // Полная видимость
                 infoText.innerText = "Объект установлен (Тапните, чтобы переставить)";
             }
         }
@@ -131,11 +133,20 @@
 
                 if (hitTestSource) {
                     const hitTestResults = frame.getHitTestResults(hitTestSource);
+                    
+                    // Если пол найден
                     if (hitTestResults.length > 0) {
                         const hit = hitTestResults[0];
+                        
+                        // Двигаем модель ТОЛЬКО если она НЕ зафиксирована (isLocked === false)
                         if (!isLocked && objectToPlace) {
                             objectToPlace.visible = true;
                             objectToPlace.position.setFromMatrixPosition(new THREE.Matrix4().fromArray(hit.getPose(referenceSpace).transform.matrix));
+                            
+                            // Поворачиваем модель лицом к пользователю (опционально, можно убрать)
+                            // objectToPlace.lookAt(camera.position.x, objectToPlace.position.y, camera.position.z);
+                            
+                            // ЖЕЛЕЗНЫЙ МАСШТАБ
                             objectToPlace.scale.set(1, 1, 1);
                         }
                     }
@@ -145,22 +156,7 @@
         }
 
         startBtn.addEventListener('click', () => {
-            const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
-
-            if (isIOS) {
-                const a = document.createElement('a');
-                a.setAttribute('rel', 'ar');
-                // Код сам добавляет .usdz и блокировку масштаба для iPhone
-                a.setAttribute('href', `${MODEL_NAME}.usdz#allowsContentScaling=0`); 
-                
-                const img = document.createElement('img');
-                a.appendChild(img);
-                document.body.appendChild(a);
-                a.click();
-                document.body.removeChild(a);
-            } else {
-                initAR().catch(err => alert("Ошибка: " + err.message));
-            }
+            initAR().catch(err => alert("Ошибка: " + err.message));
         });
     </script>
 </body>
