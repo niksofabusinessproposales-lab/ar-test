@@ -41,7 +41,7 @@
         // Впиши имя файла без расширения (например: 'test', 'sofa', 'cup')
         // Для .glb будет подставляться: test.glb
         // Для .usdz на iOS будет подставляться: testi.usdz
-        const MODEL_NAME = 'test9';
+        const MODEL_NAME = 'test';
         // =======================================================
 
         let renderer, scene, camera, controller, objectToPlace;
@@ -146,7 +146,7 @@
                 isLocked = true;
                 // Сохраняем текущую позицию и поворот в момент фиксации
                 fixedPosition.copy(objectToPlace.position);
-                fixedRotationY = objectToPlace.rotation.y;
+                fixedRotationY = objectToPlace.rotation.y; // <-- Сохраняем Y-угол
 
                 updateOpacity(objectToPlace, 1.0); // Полная видимость
                 infoText.innerText = "Объект установлен (Тапните, чтобы переставить)";
@@ -180,17 +180,20 @@
                             objectToPlace.visible = true;
                             objectToPlace.position.setFromMatrixPosition(new THREE.Matrix4().fromArray(hit.getPose(referenceSpace).transform.matrix));
                             
-                            // ПОВОРОТ ОБЪЕКТА ТОЛЬКО ВОКРУГ ВЕРТИКАЛЬНОЙ ОСИ (Y) к камере
+                            // --- ВЕРНУТАЯ ЛОГИКА ПОВОРОТА К КАМЕРЕ ---
+                            // ПОВОРОТ ОБЪЕКТА ТОЛЬКО ВОКРУГ ВЕРТИКАЛЬНОЙ ОСИ (Y) к камере (режим "призрака")
                             const angle = Math.atan2(
                                 camera.position.x - objectToPlace.position.x,
                                 camera.position.z - objectToPlace.position.z
                             );
                             objectToPlace.rotation.y = angle;
+                            // -----------------------------------------
                             
                             // ЖЕЛЕЗНЫЙ МАСШТАБ
                             objectToPlace.scale.set(1, 1, 1);
                         }
                         // Если isLocked === true, НИЧЕГО не делаем с позицией и поворотом в этом блоке
+                        // Объект будет использовать сохранённые fixedPosition и fixedRotationY (это реализовано ниже)
                     } else {
                          // Если hitTest не дал результатов, и объект не зафиксирован, он исчезает
                          if (!isLocked && objectToPlace) {
