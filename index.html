@@ -22,6 +22,7 @@
     <div id="info-overlay">Нажмите кнопку, чтобы начать</div>
     <button id="start-ar-btn">ЗАПУСТИТЬ AR</button>
 
+    <!-- Исправленный importmap без пробелов -->
     <script type="importmap">
         {
             "imports": {
@@ -36,23 +37,20 @@
         import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
         // =======================================================
-        // НАСТРОЙКИ МОДЕЛИ (менять только здесь)
-        // Пишешь базовое имя, БЕЗ расширений и БЕЗ "i".
-        // В папке должны лежать:
-        //   <имя>.glb      — для Android
-        //   <имя>i.usdz    — для iOS
-        //
-        // Пример: MODEL_BASE_NAME = 'test9'
-        //   Android: test9.glb
-        //   iOS:     test9i.usdz
-        // =======================================================
-        const MODEL_BASE_NAME = 'test9';
+        // НАСТРОЙКИ МОДЕЛИ (МЕНЯТЬ ТОЛЬКО ЗДЕСЬ)
+        // Впиши имя файла без расширения (например: 'test', 'sofa', 'cup')
+        // Для .glb будет подставляться: test.glb
+        // Для .usdz на iOS будет подставляться: testi.usdz
+        const MODEL_NAME = 'test';
         // =======================================================
 
         let renderer, scene, camera, controller, objectToPlace;
         let hitTestSource = null;
         let hitTestSourceRequested = false;
         let isLocked = false; 
+        // Переменные для хранения фиксированной позиции и поворота
+        let fixedPosition = new THREE.Vector3();
+        let fixedRotationY = 0;
 
         const startBtn = document.getElementById('start-ar-btn');
         const infoText = document.getElementById('info-overlay');
@@ -66,6 +64,7 @@
             renderer.setSize(window.innerWidth, window.innerHeight);
             renderer.xr.enabled = true;
             
+            // Улучшенный свет для реализма
             const hemiLight = new THREE.HemisphereLight(0xffffff, 0x444444, 3);
             hemiLight.position.set(0, 1, 0);
             scene.add(hemiLight);
@@ -74,20 +73,41 @@
             dirLight.position.set(0, 10, 5);
             scene.add(dirLight);
 
+            // Загрузка модели .glb
             const loader = new GLTFLoader();
+            loader.load(
+                `${MODEL_NAME}.glb`, // <-- Имя файла формируется из MODEL_NAME + '.glb'
+                (gltf) => {
+                    objectToPlace = gltf.scene;
+                    objectToPlace.visible = false; 
+                    scene.add(objectToPlace);
+                    
+                    // Сразу делаем его полупрозрачным (режим призрака)
+                    updateOpacity(objectToPlace, 0.5);
+                },
+                (xhr) => {
+                    // Прогресс загрузки (опционально)
+                    console.log((xhr.loaded / xhr.total * 100) + '% loaded');
+                },
+                (error) => {
+                    // Обработка ошибки загрузки
+                    console.error('Ошибка загрузки модели .glb:', error);
+                    infoText.innerText = "Ошибка загрузки модели .glb. Проверьте файл.";
+                }
+            );
 
-            // Android: грузим <MODEL_BASE_NAME>.glb
-            loader.load(`${MODEL_BASE_NAME}.glb`, (gltf) => {
-                objectToPlace = gltf.scene;
-                objectToPlace.visible = false; 
-                scene.add(objectToPlace);
-                updateOpacity(objectToPlace, 0.5);
-            });
-
+            // Стартуем сессию
             const sessionInit = { requiredFeatures: ['hit-test'] };
             const session = await navigator.xr.requestSession('immersive-ar', sessionInit);
             renderer.xr.setReferenceSpaceType('local');
             await renderer.xr.setSession(session);
+
+            // Очистка памяти при выходе из сессии
+            session.addEventListener('end', () => {
+                if (hitTestSource) hitTestSource.cancel();
+                hitTestSource = null;
+                hitTestSourceRequested = false;
+            });
 
             startBtn.style.display = 'none';
             infoText.innerText = "Ищем пол... Водите телефоном";
@@ -99,32 +119,41 @@
             renderer.setAnimationLoop(render);
         }
 
+        // Функция переключения прозрачности
         function updateOpacity(obj, opacity) {
-            if (!obj) return;
             obj.traverse((child) => {
-                if (child.isMesh && child.material) {
+                if (child.isMesh) {
                     child.material.transparent = true;
                     child.material.opacity = opacity;
+                    // Нужно для корректного отображения прозрачности
                     child.material.depthWrite = opacity === 1.0; 
                     child.material.needsUpdate = true;
                 }
             });
         }
 
+        // Обработчик выбора (тапа)
         function onSelect() {
             if (!objectToPlace || !objectToPlace.visible) return;
 
             if (isLocked) {
+                // Если был зафиксирован -> "Отлипаем", снова становится призраком
                 isLocked = false;
                 updateOpacity(objectToPlace, 0.5);
                 infoText.innerText = "Режим примерки (Тапните для установки)";
             } else {
+                // Если был призраком -> Фиксируем на месте: сохраняем текущую позицию и поворот
                 isLocked = true;
-                updateOpacity(objectToPlace, 1.0);
+                // Сохраняем текущую позицию и поворот в момент фиксации
+                fixedPosition.copy(objectToPlace.position);
+                fixedRotationY = objectToPlace.rotation.y;
+
+                updateOpacity(objectToPlace, 1.0); // Полная видимость
                 infoText.innerText = "Объект установлен (Тапните, чтобы переставить)";
             }
         }
 
+        // Основной цикл рендеринга
         function render(timestamp, frame) {
             if (frame) {
                 const referenceSpace = renderer.xr.getReferenceSpace();
@@ -141,33 +170,55 @@
 
                 if (hitTestSource) {
                     const hitTestResults = frame.getHitTestResults(hitTestSource);
+                    
+                    // Если пол найден
                     if (hitTestResults.length > 0) {
                         const hit = hitTestResults[0];
+                        
+                        // Двигаем модель ТОЛЬКО если она НЕ зафиксирована (isLocked === false)
                         if (!isLocked && objectToPlace) {
                             objectToPlace.visible = true;
-                            objectToPlace.position.setFromMatrixPosition(
-                                new THREE.Matrix4().fromArray(
-                                    hit.getPose(referenceSpace).transform.matrix
-                                )
+                            objectToPlace.position.setFromMatrixPosition(new THREE.Matrix4().fromArray(hit.getPose(referenceSpace).transform.matrix));
+                            
+                            // ПОВОРОТ ОБЪЕКТА ТОЛЬКО ВОКРУГ ВЕРТИКАЛЬНОЙ ОСИ (Y) к камере
+                            const angle = Math.atan2(
+                                camera.position.x - objectToPlace.position.x,
+                                camera.position.z - objectToPlace.position.z
                             );
+                            objectToPlace.rotation.y = angle;
+                            
+                            // ЖЕЛЕЗНЫЙ МАСШТАБ
                             objectToPlace.scale.set(1, 1, 1);
                         }
+                        // Если isLocked === true, НИЧЕГО не делаем с позицией и поворотом в этом блоке
+                    } else {
+                         // Если hitTest не дал результатов, и объект не зафиксирован, он исчезает
+                         if (!isLocked && objectToPlace) {
+                              objectToPlace.visible = false;
+                         }
                     }
                 }
             }
             renderer.render(scene, camera);
         }
 
+        // Обработка поворота экрана (ресайз)
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
         startBtn.addEventListener('click', () => {
-            const isIOS =
-                /iPad|iPhone|iPod/.test(navigator.userAgent) ||
-                (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+            // Проверяем, iOS ли это
+            const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 
             if (isIOS) {
+                // Для iOS создаём ссылку на .usdz с именем MODEL_NAME + 'i.usdz'
                 const a = document.createElement('a');
                 a.setAttribute('rel', 'ar');
-                // iOS: <MODEL_BASE_NAME>i.usdz
-                a.setAttribute('href', `${MODEL_BASE_NAME}i.usdz#allowsContentScaling=0`); 
+                // Формируем имя файла как MODEL_NAME + 'i.usdz'
+                a.setAttribute('href', `${MODEL_NAME}i.usdz#allowsContentScaling=0`); 
                 
                 const img = document.createElement('img');
                 a.appendChild(img);
@@ -175,6 +226,7 @@
                 a.click();
                 document.body.removeChild(a);
             } else {
+                // Для Android и других платформ запускаем WebXR
                 initAR().catch(err => alert("Ошибка: " + err.message));
             }
         });
